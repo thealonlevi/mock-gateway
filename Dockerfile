@@ -1,20 +1,29 @@
-# ---------- build stage ----------
+######################## build stage ########################
 FROM golang:1.22-alpine AS builder
 WORKDIR /src
 
-# copy go modules first for better build-cache reuse
+# Improve cache usage: fetch modules first
 COPY go.mod go.sum ./
 RUN go mod download
 
-# copy the rest of the source and build
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags="-s -w" -o /bin/echo-id ./main.go
+# Build-time argument: upstream host:port for sdk-server NLB
+# e.g. "--build-arg UPSTREAM=sdk-server-nlb:9090"
+ARG UPSTREAM=sdk-server-nlb:9090
+ENV UPSTREAM=${UPSTREAM}
 
-# ---------- runtime stage ----------
+# Copy source and compile
+COPY . .
+
+# Inject upstream via -ldflags: -X main.upstream=<host:port>
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w -X main.upstream=${UPSTREAM}" \
+    -o /bin/mock-gateway ./main.go
+
+####################### runtime stage #######################
 FROM gcr.io/distroless/static-debian11
-COPY --from=builder /bin/echo-id /echo-id
+
+# Minimal container with static binary
+COPY --from=builder /bin/mock-gateway /mock-gateway
 
 EXPOSE 8080
-ENTRYPOINT ["/echo-id"]
-    
+ENTRYPOINT ["/mock-gateway"]
